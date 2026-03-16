@@ -902,8 +902,12 @@ function onFilesSelected(inp){
 }
 
 function onAddFiles(inp){
-  const files = Array.from(inp.files||[]);
-  if(!files.length) return;
+  const allFiles = Array.from(inp.files||[]);
+  if(!allFiles.length) return;
+  const files = allFiles.filter(isAudioFile);
+  const skipped = allFiles.length - files.length;
+  if(skipped > 0) showToast(`⚠️ ${skipped} desteklenmeyen dosya atlandı`);
+  if(!files.length){ showToast('⚠️ Ses dosyası bulunamadı'); return; }
   processFiles(files, true); // true = mevcut listeye ekle
   inp.value = '';
 }
