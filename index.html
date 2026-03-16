@@ -745,7 +745,7 @@ async function openDB() {
       if(!d.objectStoreNames.contains('meta'))  d.createObjectStore('meta', {keyPath:'id'});
     };
     r.onsuccess = e=>{ db=e.target.result; res(); };
-    r.onerror   = ()=>res(); // hata olsa da devam et
+    r.onerror   = (e)=>{ console.warn('IndexedDB open error:', e); showToast('⚠️ Veritabanı açılamadı'); res(); };
   });
 }
 
@@ -756,8 +756,8 @@ function dbPut(store,obj){
       const tx=db.transaction(store,'readwrite');
       tx.objectStore(store).put(obj);
       tx.oncomplete=()=>res();
-      tx.onerror=()=>res();
-    }catch{res();}
+      tx.onerror=(e)=>{ console.warn('IndexedDB put error:', e); res(); };
+    }catch(e){ console.warn('IndexedDB put exception:', e); res(); }
   });
 }
 
@@ -768,8 +768,8 @@ function dbGet(store,key){
       const tx=db.transaction(store,'readonly');
       const rq=tx.objectStore(store).get(key);
       rq.onsuccess=e=>res(e.target.result||null);
-      rq.onerror=()=>res(null);
-    }catch{res(null);}
+      rq.onerror=(e)=>{ console.warn('IndexedDB get error:', e); res(null); };
+    }catch(e){ console.warn('IndexedDB get exception:', e); res(null); }
   });
 }
 
@@ -780,8 +780,8 @@ function dbGetAll(store){
       const tx=db.transaction(store,'readonly');
       const rq=tx.objectStore(store).getAll();
       rq.onsuccess=e=>res(e.target.result||[]);
-      rq.onerror=()=>res([]);
-    }catch{res([]);}
+      rq.onerror=(e)=>{ console.warn('IndexedDB getAll error:', e); res([]); };
+    }catch(e){ console.warn('IndexedDB getAll exception:', e); res([]); }
   });
 }
 
@@ -792,8 +792,8 @@ function dbDel(store,key){
       const tx=db.transaction(store,'readwrite');
       tx.objectStore(store).delete(key);
       tx.oncomplete=()=>res();
-      tx.onerror=()=>res();
-    }catch{res();}
+      tx.onerror=(e)=>{ console.warn('IndexedDB delete error:', e); res(); };
+    }catch(e){ console.warn('IndexedDB delete exception:', e); res(); }
   });
 }
 
@@ -804,8 +804,8 @@ function dbClear(store){
       const tx=db.transaction(store,'readwrite');
       tx.objectStore(store).clear();
       tx.oncomplete=()=>res();
-      tx.onerror=()=>res();
-    }catch{res();}
+      tx.onerror=(e)=>{ console.warn('IndexedDB clear error:', e); res(); };
+    }catch(e){ console.warn('IndexedDB clear exception:', e); res(); }
   });
 }
 
@@ -835,7 +835,7 @@ let specVals = [];
 
 // LocalStorage yardımcıları
 function lsGet(k){try{return localStorage.getItem(k);}catch{return null;}}
-function lsSet(k,v){try{localStorage.setItem(k,v);}catch{}}
+function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){ console.warn('localStorage write error:', k, e); }}
 
 let favs   = new Set(JSON.parse(lsGet('mb4_favs')  ||'[]'));
 let pls    = JSON.parse(lsGet('mb4_pls')            ||'[]');
@@ -883,17 +883,31 @@ function goTab(id,el){
 }
 
 /* ─── DOSYA SEÇİMİ (iOS için en güvenilir yöntem) ─── */
+function isAudioFile(file){
+  if(file.type && file.type.startsWith('audio/')) return true;
+  const ext = (file.name.split('.').pop()||'').toLowerCase();
+  return ['mp3','m4a','aac','ogg','wav','flac','opus','wma','webm'].includes(ext);
+}
+
 function onFilesSelected(inp){
-  const files = Array.from(inp.files||[]);
-  if(!files.length){ showToast('⚠️ Dosya seçilmedi'); return; }
+  const allFiles = Array.from(inp.files||[]);
+  if(!allFiles.length){ showToast('⚠️ Dosya seçilmedi'); return; }
+  const files = allFiles.filter(isAudioFile);
+  const skipped = allFiles.length - files.length;
+  if(skipped > 0) showToast(`⚠️ ${skipped} desteklenmeyen dosya atlandı`);
+  if(!files.length){ showToast('⚠️ Ses dosyası bulunamadı'); return; }
   processFiles(files, false);
   // Input'u sıfırla — aynı dosyalar tekrar seçilebilsin
   inp.value = '';
 }
 
 function onAddFiles(inp){
-  const files = Array.from(inp.files||[]);
-  if(!files.length) return;
+  const allFiles = Array.from(inp.files||[]);
+  if(!allFiles.length) return;
+  const files = allFiles.filter(isAudioFile);
+  const skipped = allFiles.length - files.length;
+  if(skipped > 0) showToast(`⚠️ ${skipped} desteklenmeyen dosya atlandı`);
+  if(!files.length){ showToast('⚠️ Ses dosyası bulunamadı'); return; }
   processFiles(files, true); // true = mevcut listeye ekle
   inp.value = '';
 }
@@ -909,11 +923,23 @@ async function processFiles(files, append){
     await dbClear('meta');
   }
 
+  // Duplicate detection: build a set of existing file name+size pairs
+  const existingFiles = new Set(tracks.map(t => t.name + '|' + (t.fileSize || 0)));
+  let skippedDupes = 0;
+
   const total = files.length;
   for(let i=0; i<files.length; i++){
     const file = files[i];
     try{
       setScanTxt(`${i+1}/${total}: ${file.name.substring(0,25)}`);
+
+      // Skip duplicate files (same name and size)
+      const fileKey = file.name + '|' + file.size;
+      if(existingFiles.has(fileKey)){
+        skippedDupes++;
+        continue;
+      }
+      existingFiles.add(fileKey);
 
       const id  = 'tr_'+Date.now().toString(36)+'_'+Math.random().toString(36).substr(2,5);
       const ext = (file.name.split('.').pop()||'mp3').toLowerCase();
@@ -940,7 +966,7 @@ async function processFiles(files, append){
       try{ dur = await getDur(blobUrl); }catch{}
 
       const meta = {
-        id, name:file.name,
+        id, name:file.name, fileSize:file.size,
         format: ext.toUpperCase(),
         title:  tags.title  || cleanName(file.name),
         artist: tags.artist || 'Bilinmeyen Sanatçı',
@@ -966,7 +992,13 @@ async function processFiles(files, append){
   }
 
   showScanUI(false);
-  afterLoad();
+  if(skippedDupes > 0){
+    showToast(`⚠️ ${skippedDupes} tekrar dosya atlandı`);
+    // Delay afterLoad so toast is visible
+    setTimeout(()=>afterLoad(), 1200);
+  } else {
+    afterLoad();
+  }
 }
 
 function readSlice(file, bytes){
@@ -1296,13 +1328,15 @@ function buildSpec(){
 function startSpec(){
   if(specRaf)cancelAnimationFrame(specRaf);
   if(!cfg.spectrum)return;
+  if(!playing)return; // Don't animate when paused
   const bars=document.querySelectorAll('.sp');
   if(!bars.length)return;
   if(!specVals.length)specVals=Array.from({length:bars.length},()=>Math.random());
   function draw(){
+    if(!playing){ specRaf=null; return; } // Stop animation when paused
     specRaf=requestAnimationFrame(draw);
     bars.forEach((b,i)=>{
-      specVals[i]=Math.max(0,Math.min(1,specVals[i]+(Math.random()-.5)*(playing?.28:.06)));
+      specVals[i]=Math.max(0,Math.min(1,specVals[i]+(Math.random()-.5)*.28));
       b.style.height=(specVals[i]*28+3)+'px';
       b.style.opacity=(.35+specVals[i]*.6).toFixed(2);
     });
