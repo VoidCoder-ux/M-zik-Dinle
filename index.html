@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MüzikBox">
 <meta name="theme-color" content="#07071a">
+<link rel="manifest" href="manifest.json">
 <title>🎵 MüzikBox Pro</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
@@ -444,6 +445,9 @@ body{color:var(--t);font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display
 .pwa-txt b{color:var(--t)}
 .pwa-x{width:22px;height:22px;background:var(--c3);border:none;border-radius:6px;
   color:var(--t2);font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.pwa-btn{background:linear-gradient(135deg,var(--p3),var(--b));color:#fff;border:none;
+  border-radius:8px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer;
+  white-space:nowrap;flex-shrink:0;box-shadow:0 2px 8px rgba(139,92,246,.35)}
 </style>
 </head>
 <body>
@@ -510,9 +514,17 @@ body{color:var(--t);font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display
     <!-- KİTAPLIK -->
     <div class="pg on" id="pg-lib">
 
-      <div class="pwa-b" id="pwaBan">
+      <!-- iOS: Paylaş menüsü talimatı -->
+      <div class="pwa-b" id="pwaBanIOS" style="display:none">
         <div style="font-size:20px;flex-shrink:0">📲</div>
-        <div class="pwa-txt"><b>Ana Ekrana Ekle</b> → Paylaş → Ana Ekrana Ekle → Arka planda çalma aktif!</div>
+        <div class="pwa-txt"><b>Ana Ekrana Ekle</b><br>Paylaş (⬆️) → Ana Ekrana Ekle</div>
+        <button class="pwa-x" onclick="hidePWA()">✕</button>
+      </div>
+      <!-- Android/Chrome: Yerel yükleme butonu -->
+      <div class="pwa-b" id="pwaBanAndroid" style="display:none">
+        <div style="font-size:20px;flex-shrink:0">📲</div>
+        <div class="pwa-txt"><b>Ana Ekrana Ekle</b><br>Uygulamayı yükle, çevrimdışı çalış!</div>
+        <button class="pwa-btn" id="pwaInstallBtn" onclick="installPWA()">Yükle</button>
         <button class="pwa-x" onclick="hidePWA()">✕</button>
       </div>
 
@@ -1677,7 +1689,35 @@ function setSleep(min,el){
 }
 
 /* ─── PWA ─── */
-function hidePWA(){document.getElementById('pwaBan').style.display='none';lsSet('mb4_pwa','1');}
+let _deferredInstall=null;
+
+window.addEventListener('beforeinstallprompt',e=>{
+  e.preventDefault();
+  _deferredInstall=e;
+  if(!lsGet('mb4_pwa')){
+    document.getElementById('pwaBanAndroid').style.display='flex';
+  }
+});
+
+window.addEventListener('appinstalled',()=>{
+  hidePWA();
+  showToast('✅ Uygulama ana ekrana eklendi!');
+});
+
+function installPWA(){
+  if(!_deferredInstall)return;
+  _deferredInstall.prompt();
+  _deferredInstall.userChoice.then(r=>{
+    if(r.outcome==='accepted'){hidePWA();showToast('✅ Uygulama yüklendi!');}
+    _deferredInstall=null;
+  });
+}
+
+function hidePWA(){
+  document.getElementById('pwaBanIOS').style.display='none';
+  document.getElementById('pwaBanAndroid').style.display='none';
+  lsSet('mb4_pwa','1');
+}
 
 /* ─── GENEL ─── */
 function updBadge(){document.getElementById('badge').textContent=tracks.length;}
@@ -1717,7 +1757,20 @@ async function init(){
   buildEQ();
   document.getElementById('volFill').style.width=(vol*100)+'%';
   const isPWA=window.navigator.standalone||window.matchMedia('(display-mode:standalone)').matches;
-  if(isPWA||lsGet('mb4_pwa'))document.getElementById('pwaBan').style.display='none';
+  if(isPWA||lsGet('mb4_pwa')){
+    document.getElementById('pwaBanIOS').style.display='none';
+    document.getElementById('pwaBanAndroid').style.display='none';
+  } else {
+    const isIOS=/iP(hone|ad|od)/.test(navigator.userAgent)&&!window.MSStream;
+    const isSafari=/^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+    if(isIOS&&isSafari){
+      document.getElementById('pwaBanIOS').style.display='flex';
+    }
+    // Android/Chrome banner açılışı beforeinstallprompt event'i ile tetiklenir
+  }
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  }
   await checkRestore();
 }
 
