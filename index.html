@@ -976,7 +976,7 @@ let cfg    = JSON.parse(lsGet('mb4_cfg')            ||'{}');
 let hist   = JSON.parse(lsGet('mb4_hist')           ||'[]');
 let pcnt   = JSON.parse(lsGet('mb4_pcnt')           ||'{}');
 
-cfg = {autoplay:true, spectrum:true, dynbg:true, normalize:false, eqOn:true, hpPause:true, xf:0, eqPreset:'Normal', eqBands:[0,0,0,0,0], ...cfg};
+cfg = {autoplay:true, spectrum:true, dynbg:true, normalize:false, eqOn:false, hpPause:true, xf:0, eqPreset:'Normal', eqBands:[0,0,0,0,0], ...cfg};
 
 // Blob URL map (bellek yönetimi)
 let blobUrls  = {}; // id → audio url
@@ -1439,7 +1439,9 @@ function playIdx(i){
   const tr=queue[ci];
   if(!tr?.url){showToast('⚠️ Dosya yüklenemedi');return;}
 
-  initWebAudio(); resumeAC();
+  // Yalnızca gerekli (AC özelliği aktif) ise Web Audio'yu başlat; aksi halde native çalsın
+  initWebAudio();
+  resumeAC();
   if(_xfTO){ clearTimeout(_xfTO); _xfTO=null; }
   _xfInProgress = false;
   // crossfade geçişi değilse iki elementi de temiz başlat
@@ -1846,6 +1848,7 @@ function applyEQ(name,el){
   cfg.eqPreset = name;
   cfg.eqBands  = [...vals];
   lsSet('mb4_cfg', JSON.stringify(cfg));
+  if(cfg.eqOn && vals.some(v=>Math.abs(v)>0.01)){ warnIOSBgOnce(); initWebAudio(true); }
   applyEqCfg();
 }
 
@@ -1871,7 +1874,10 @@ function togCfg(k){
   const el=document.getElementById('tog-'+k);
   if(el)el.classList.toggle('on',cfg[k]);
   lsSet('mb4_cfg',JSON.stringify(cfg));
-  if(k==='normalize'){ initWebAudio(); applyNormalize(); }
+  if(k==='normalize'){
+    if(cfg.normalize){ warnIOSBgOnce(); initWebAudio(true); }
+    applyNormalize();
+  }
   if(k==='eqOn'){ applyEqCfg(); }
   const labels = {autoplay:'Otomatik oynat', spectrum:'Spektrum', dynbg:'Dinamik renk', hpPause:'Kulaklık duraklatma', normalize:'Normalleştirme', eqOn:'Ekolayzer'};
   const lbl = labels[k]||k;
@@ -2143,8 +2149,26 @@ function clearAll(){
 }
 
 /* ─── WEB AUDIO: EQ + NORMALLEŞTİRME + CROSSFADE ─── */
-function initWebAudio(){
+// iOS Safari, MediaElementSource ile bağlı AudioContext'i arka planda askıya alır.
+// Bu yüzden Web Audio zincirini YALNIZCA bir özellik aktifken kur — yoksa native
+// audio elementi çalsın ki iOS'ta arka planda ses kesilmesin.
+const _iOS = /iP(hone|ad|od)/.test(navigator.userAgent) && !window.MSStream;
+let _iOSWarnShown = false;
+function shouldUseWebAudio(){
+  if(cfg.normalize) return true;
+  if((+cfg.xf||0) > 0) return true;
+  if(cfg.eqOn && (cfg.eqBands||[]).some(v => Math.abs(v) > 0.01)) return true;
+  return false;
+}
+function warnIOSBgOnce(){
+  if(!_iOS || _iOSWarnShown) return;
+  _iOSWarnShown = true;
+  showToast('⚠️ iPhone: Bu özellik açıkken arka planda ses kesilebilir');
+}
+
+function initWebAudio(force){
   if(_ac) return;
+  if(!force && !shouldUseWebAudio()) return;
   try{
     const AC = window.AudioContext || window.webkitAudioContext;
     if(!AC) return;
@@ -2215,6 +2239,7 @@ function setEqBand(i,v){
   cfg.eqPreset = 'Özel';
   document.querySelectorAll('.eq-pr').forEach(p=>p.classList.remove('on'));
   lsSet('mb4_cfg', JSON.stringify(cfg));
+  if(cfg.eqOn && Math.abs(v) > 0.01){ warnIOSBgOnce(); initWebAudio(true); }
   applyEqCfg();
 }
 
@@ -2276,6 +2301,7 @@ function setXF(sec,el){
   lsSet('mb4_cfg', JSON.stringify(cfg));
   document.querySelectorAll('#xfBtns .slp-btn').forEach(b=>b.classList.remove('on'));
   if(el) el.classList.add('on');
+  if(sec > 0){ warnIOSBgOnce(); initWebAudio(true); }
   showToast(sec ? `🔁 Crossfade ${sec} sn` : '🔁 Crossfade kapalı');
   scheduleCrossfade();
 }
@@ -2363,6 +2389,7 @@ function onJsonImport(inp){
       lsSet('mb4_pcnt',JSON.stringify(pcnt));
       lsSet('mb4_cfg', JSON.stringify(cfg));
       renderLib(); renderPls(); renderCfg();
+      if(shouldUseWebAudio()) initWebAudio(true);
       applyEqCfg(); applyNormalize();
       showToast('✅ Yedek geri yüklendi');
     }catch{ showToast('⚠️ Geçersiz yedek dosyası'); }
@@ -2421,8 +2448,9 @@ async function init(){
   buildSpec();startSpec();
   buildEQ();
   setupHeadphoneWatch();
-  // İlk kullanıcı etkileşiminde AudioContext'i başlat/devam ettir (autoplay policy)
-  const _firstGesture=()=>{ initWebAudio(); resumeAC(); document.removeEventListener('click',_firstGesture); document.removeEventListener('touchstart',_firstGesture); };
+  // İlk kullanıcı etkileşiminde varsa AudioContext'i devam ettir (autoplay policy)
+  // — initWebAudio() çağrılmaz, yalnızca zaten kurulduysa resume eder
+  const _firstGesture=()=>{ resumeAC(); document.removeEventListener('click',_firstGesture); document.removeEventListener('touchstart',_firstGesture); };
   document.addEventListener('click',_firstGesture,{once:true});
   document.addEventListener('touchstart',_firstGesture,{once:true,passive:true});
   document.getElementById('volFill').style.width=(vol*100)+'%';
